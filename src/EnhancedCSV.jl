@@ -47,8 +47,7 @@ function read(sink, source::AbstractString; kw...)
     colspecs = NamedTuple(Symbol(d["name"]) => ColumnSpec(d) for d in header["datatype"])
 
     delim = only(get(header, "delimiter", " "))
-    tbl = CSV.read(source, columntable; comment="#", delim, kw...)
-    tbl = map(col -> col[1:5], tbl)
+    tbl = CSV.read(source, columntable; comment="#", delim, ntasks=1, kw...)
     
     @assert propertynames(tbl) == values(map(c -> c.name, colspecs))
     
