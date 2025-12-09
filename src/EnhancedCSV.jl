@@ -95,7 +95,7 @@ struct ColumnSpec
     name::Symbol
     datatype::Type
     subtype::Union{NamedTuple,Nothing}
-    unit::Union{Unitful.FreeUnits,Nothing}
+    unit::Union{Unitful.FreeUnits,Unitful.MixedUnits,Nothing}
 end
 
 ColumnSpec(d::Dict) = ColumnSpec(
@@ -153,7 +153,7 @@ end
 convert_column(col::AbstractVector, spec::ColumnSpec) = _convert_column_u(col, spec, spec.unit)
 
 _convert_column_u(col, spec, u::Nothing) = _convert_column(col, spec.datatype, spec.subtype)
-_convert_column_u(col, spec, u::Unitful.FreeUnits) = _convert_column(col, spec.datatype, spec.subtype) * u
+_convert_column_u(col, spec, u::Union{Unitful.FreeUnits,Unitful.MixedUnits}) = _convert_column(col, spec.datatype, spec.subtype) * u
 
 function _convert_column(col, datatype::Type{T}, subtype::Nothing) where {T}
     T == String && return col
