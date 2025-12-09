@@ -5,11 +5,16 @@ version = "0.1.0"
 
 [deps]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
-DataManipulation = "38052440-ad76-4236-8414-61389b2c5143"
+DataPipes = "02685ad9-2d12-40c3-9f73-c6aeda6a7ff5"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+Tables = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
+Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 YAML = "ddb6d928-2868-570f-bddf-ab3f9cf99eb6"
 
 [compat]
 CSV = "0.10.15"
-DataManipulation = "0.1.21"
+JSON = "1.3.0"
+Tables = "1.12.1"
+Unitful = "1.25.1"
 YAML = "0.4.16"
 julia = "1.10"
