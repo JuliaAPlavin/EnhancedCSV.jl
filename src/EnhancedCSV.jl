@@ -168,6 +168,7 @@ end
 
 _convert_column(col, datatype, subtype::NamedTuple) = _convert_column(col, datatype, subtype.type, subtype.dims)
 function _convert_column(col, datatype::Type{String}, subtype::Type{T}, subdims::AbstractString) where {T}
+    @assert T != Bool
     @assert subdims == "null"
 
     map(col) do x
@@ -175,26 +176,33 @@ function _convert_column(col, datatype::Type{String}, subtype::Type{T}, subdims:
         JSON.parse(x, Vector{Union{Missing,T}}; allownan=true)
     end
 end
+
+JSON.@nonstruct struct MyBool
+    val::Bool
+end
+function JSON.lift(::Type{MyBool}, s::AbstractString)
+    MyBool(
+        first(s) in ('T', 't', '1') ? true :
+        first(s) in ('F', 'f', '0') ? false :
+        parse(Bool, s)
+    )
+end
+
+using StructArrays
+
 function _convert_column(col, datatype::Type{String}, subtype::Type{Bool}, subdims::AbstractString)
     @assert subdims == "null"
 
+    symb_to_bool = Dict(
+        :false => false,
+        :False => false,
+        :true => true,
+        :True => true,
+    )
+
     map(col) do x
         ismissing(x) && return missing
-        try
-            return JSON.parse(x, Vector{Union{Missing,Bool}})
-        catch e
-            strs = JSON.parse(x, Vector{Union{Missing,String}})
-            return map(strs) do s
-                ismissing(s) && return missing
-                if s == "T" || lowercase(s) == "true" || s == "1"
-                    true
-                elseif s == "F" || lowercase(s) == "false" || s == "0"
-                    false
-                else
-                    throw(ArgumentError("cannot convert '$s' to Bool"))
-                end
-            end
-        end
+        JSON.parse(x, StructVector{MyBool}).val
     end
 end
 
