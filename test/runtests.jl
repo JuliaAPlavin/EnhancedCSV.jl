@@ -6,6 +6,7 @@ using TestItemRunner
     using StructArrays
     using Unitful
 
+    run(`gunzip --keep data/gaia.csv.gz`)
     tbl = EnhancedCSV.read(StructArray, "data/gaia.csv")
     @test length(tbl) == 5
     @test propertynames(tbl)[1] == :solution_id
