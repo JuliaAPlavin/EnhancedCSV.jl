@@ -11,5 +11,7 @@ UnitfulAstro = "6112ee07-acf9-5e0f-b108-d242c714bf9f"
 [compat]
 Aqua = "0.8.14"
 CompatHelperLocal = "0.1.27"
+Test = "1"
 TestItemRunner = "1.1.1"
 TestItems = "1.0.0"
+UnitfulAstro = "1.2.2"
