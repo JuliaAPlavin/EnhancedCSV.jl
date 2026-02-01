@@ -318,7 +318,7 @@ _prepare_val(x::Union{Unitful.Quantity, Unitful.LogScaled}) = Unitful.ustrip(x)
 _prepare_val(x::AbstractVector) = json_encode_array(x)
 
 function json_encode_array(arr::AbstractVector)
-    cleaned = if eltype(arr) >: Missing || eltype(arr) >: Union{Unitful.Quantity,Unitful.LogScaled}
+    cleaned = if eltype(arr) >: Missing || eltype(arr) <: Union{Unitful.Quantity,Unitful.LogScaled}
         map(arr) do x
             ismissing(x) && return nothing
             x isa Unitful.Quantity || x isa Unitful.LogScaled ? Unitful.ustrip(x) : x
