@@ -7,7 +7,7 @@ using Unitful
 using Tables: columntable
 using DataPipes
 
-export read
+export read, write
 
 # Mapping from ECSV datatype names to Julia types
 const DATATYPE_MAP = Dict{String,Type}(
@@ -25,6 +25,8 @@ const DATATYPE_MAP = Dict{String,Type}(
     "float64" => Float64,
     "string" => String,
 )
+
+const REVERSE_DATATYPE_MAP = Dict{Type,String}(v => k for (k, v) in DATATYPE_MAP)
 
 """
     read(sink, source; kw...)
@@ -180,6 +182,7 @@ end
 JSON.@nonstruct struct MyBool
     val::Bool
 end
+JSON.lift(::Type{MyBool}, x::Bool) = MyBool(x)
 function JSON.lift(::Type{MyBool}, s::AbstractString)
     MyBool(
         first(s) in ('T', 't', '1') ? true :
@@ -204,6 +207,150 @@ function _convert_column(col, datatype::Type{String}, subtype::Type{Bool}, subdi
         ismissing(x) && return missing
         JSON.parse(x, StructVector{MyBool}).val
     end
+end
+
+## Writing ECSV files
+
+function write(dest::AbstractString, table; kw...)
+    open(dest, "w") do io
+        write(io, table; kw...)
+    end
+    return dest
+end
+
+function write(io::IO, table; delim=',', kw...)
+    cols = columntable(table)
+
+    # Build header
+    header = Dict{String,Any}()
+    if delim != ' '
+        header["delimiter"] = string(delim)
+    end
+    header["datatype"] = [column_to_spec(name, col) for (name, col) in pairs(cols)]
+
+    # Write ECSV header
+    println(io, "# %ECSV 1.0")
+    println(io, "# ---")
+    yaml_str = YAML.write(header)
+    for line in split(yaml_str, "\n")
+        isempty(line) && continue
+        println(io, "# ", line)
+    end
+
+    # Prepare data columns
+    csv_cols = NamedTuple(name => prepare_column_for_csv(col) for (name, col) in pairs(cols))
+
+    # Write CSV data
+    missingstring = delim == ' ' ? "\"\"" : ""
+    CSV.write(io, csv_cols; delim, append=true, writeheader=true, missingstring, kw...)
+end
+
+function column_to_spec(name::Symbol, col::AbstractVector)
+    spec = Dict{String,Any}("name" => string(name))
+    T = eltype(col)
+    NMT = Base.nonmissingtype(T)
+
+    if NMT <: Unitful.Quantity
+        valtype = Unitful.numtype(NMT)
+        spec["unit"] = unit_to_ecsv_string(Unitful.unit(NMT))
+        spec["datatype"] = REVERSE_DATATYPE_MAP[valtype]
+    elseif NMT <: Unitful.LogScaled
+        valtype = NMT.parameters[3]  # numeric type is 3rd parameter of Gain
+        spec["unit"] = string(Unitful.logunit(NMT))
+        spec["datatype"] = REVERSE_DATATYPE_MAP[valtype]
+    elseif NMT <: AbstractVector
+        _set_array_spec!(spec, col)
+    else
+        spec["datatype"] = REVERSE_DATATYPE_MAP[NMT]
+    end
+
+    return spec
+end
+
+function _set_array_spec!(spec, col)
+    # Infer element type from actual data when static type is too broad (e.g. Vector{Any})
+    elemT = _infer_array_eltype(col)
+    NME = Base.nonmissingtype(elemT)
+    if NME <: Unitful.Quantity
+        inner_valtype = Unitful.numtype(NME)
+        spec["unit"] = unit_to_ecsv_string(Unitful.unit(NME))
+        spec["subtype"] = "$(REVERSE_DATATYPE_MAP[inner_valtype])[null]"
+    elseif NME <: Unitful.LogScaled
+        inner_valtype = NME.parameters[3]
+        spec["unit"] = string(Unitful.logunit(NME))
+        spec["subtype"] = "$(REVERSE_DATATYPE_MAP[inner_valtype])[null]"
+    else
+        spec["subtype"] = "$(REVERSE_DATATYPE_MAP[NME])[null]"
+    end
+    spec["datatype"] = "string"
+end
+
+function _infer_array_eltype(col)
+    ET = eltype(Base.nonmissingtype(eltype(col)))
+    ET != Any && return ET
+    # Fallback: inspect first non-missing element
+    for x in col
+        ismissing(x) && continue
+        return eltype(x)
+    end
+    error("cannot infer element type for empty array column")
+end
+
+const SUPERSCRIPT_MAP = Dict(
+    '⁰'=>'0', '¹'=>'1', '²'=>'2', '³'=>'3', '⁴'=>'4',
+    '⁵'=>'5', '⁶'=>'6', '⁷'=>'7', '⁸'=>'8', '⁹'=>'9', '⁻'=>'-',
+)
+
+function unit_to_ecsv_string(u::Unitful.Units)
+    s = string(u)
+    buf = IOBuffer()
+    chars = collect(s)
+    i = 1
+    while i <= length(chars)
+        c = chars[i]
+        if haskey(SUPERSCRIPT_MAP, c)
+            print(buf, "**")
+            while i <= length(chars) && haskey(SUPERSCRIPT_MAP, chars[i])
+                print(buf, SUPERSCRIPT_MAP[chars[i]])
+                i += 1
+            end
+        elseif c == ' '
+            print(buf, "*")
+            i += 1
+        else
+            print(buf, c)
+            i += 1
+        end
+    end
+    String(take!(buf))
+end
+
+prepare_column_for_csv(col::AbstractVector) = _prepare_col(col, Base.nonmissingtype(eltype(col)))
+
+_prepare_col(col, ::Type{T}) where {T<:Union{Number,String}} = col
+_prepare_col(col, ::Type{Bool}) = map(x -> ismissing(x) ? missing : x ? "True" : "False", col)
+
+function _prepare_col(col, ::Type{T}) where {T<:Unitful.Quantity}
+    map(x -> ismissing(x) ? missing : Unitful.ustrip(x), col)
+end
+
+function _prepare_col(col, ::Type{T}) where {T<:Unitful.LogScaled}
+    map(x -> ismissing(x) ? missing : Unitful.ustrip(x), col)
+end
+
+function _prepare_col(col, ::Type{T}) where {T<:AbstractVector}
+    map(col) do arr
+        ismissing(arr) && return missing
+        json_encode_array(arr)
+    end
+end
+
+function json_encode_array(arr::AbstractVector)
+    cleaned = map(arr) do x
+        ismissing(x) && return nothing
+        x isa Unitful.Quantity || x isa Unitful.LogScaled ? Unitful.ustrip(x) : x
+    end
+    JSON.json(cleaned; allownan=true)
 end
 
 __precompile__(false)
