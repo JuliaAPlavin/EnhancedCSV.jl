@@ -301,54 +301,30 @@ const SUPERSCRIPT_MAP = Dict(
     '⁵'=>'5', '⁶'=>'6', '⁷'=>'7', '⁸'=>'8', '⁹'=>'9', '⁻'=>'-',
 )
 
-function unit_to_ecsv_string(u::Unitful.Units)
-    s = string(u)
-    buf = IOBuffer()
-    chars = collect(s)
-    i = 1
-    while i <= length(chars)
-        c = chars[i]
-        if haskey(SUPERSCRIPT_MAP, c)
-            print(buf, "**")
-            while i <= length(chars) && haskey(SUPERSCRIPT_MAP, chars[i])
-                print(buf, SUPERSCRIPT_MAP[chars[i]])
-                i += 1
-            end
-        elseif c == ' '
-            print(buf, "*")
-            i += 1
-        else
-            print(buf, c)
-            i += 1
-        end
-    end
-    String(take!(buf))
+unit_to_ecsv_string(u::Unitful.Units) = @p let
+    string(u)
+    replace(__, r"[⁰¹²³⁴⁵⁶⁷⁸⁹⁻]+" => m -> "**" * join(SUPERSCRIPT_MAP[c] for c in m))
+    replace(__, ' ' => '*')
 end
 
 prepare_column_for_csv(col::AbstractVector) = _prepare_col(col, Base.nonmissingtype(eltype(col)))
 
 _prepare_col(col, ::Type{T}) where {T<:Union{Number,String}} = col
-_prepare_col(col, ::Type{Bool}) = map(x -> ismissing(x) ? missing : x ? "True" : "False", col)
+_prepare_col(col::AbstractVector{>:Missing}, ::Type{<:Union{Bool,Unitful.Quantity,Unitful.LogScaled,AbstractVector}}) = map(x -> ismissing(x) ? missing : _prepare_val(x), col)
+_prepare_col(col, ::Type{<:Union{Bool,Unitful.Quantity,Unitful.LogScaled,AbstractVector}}) = _prepare_val.(col)
 
-function _prepare_col(col, ::Type{T}) where {T<:Unitful.Quantity}
-    map(x -> ismissing(x) ? missing : Unitful.ustrip(x), col)
-end
-
-function _prepare_col(col, ::Type{T}) where {T<:Unitful.LogScaled}
-    map(x -> ismissing(x) ? missing : Unitful.ustrip(x), col)
-end
-
-function _prepare_col(col, ::Type{T}) where {T<:AbstractVector}
-    map(col) do arr
-        ismissing(arr) && return missing
-        json_encode_array(arr)
-    end
-end
+_prepare_val(x::Bool) = x ? "True" : "False"
+_prepare_val(x::Union{Unitful.Quantity, Unitful.LogScaled}) = Unitful.ustrip(x)
+_prepare_val(x::AbstractVector) = json_encode_array(x)
 
 function json_encode_array(arr::AbstractVector)
-    cleaned = map(arr) do x
-        ismissing(x) && return nothing
-        x isa Unitful.Quantity || x isa Unitful.LogScaled ? Unitful.ustrip(x) : x
+    cleaned = if eltype(arr) >: Missing || eltype(arr) >: Union{Unitful.Quantity,Unitful.LogScaled}
+        map(arr) do x
+            ismissing(x) && return nothing
+            x isa Unitful.Quantity || x isa Unitful.LogScaled ? Unitful.ustrip(x) : x
+        end
+    else
+        arr
     end
     JSON.json(cleaned; allownan=true)
 end
