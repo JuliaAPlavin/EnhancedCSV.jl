@@ -12,6 +12,8 @@ UnitfulAstro = "6112ee07-acf9-5e0f-b108-d242c714bf9f"
 
 [compat]
 Aqua = "0.8.14"
+CodecZlib = "0.7.8"
+CodecZstd = "0.8.7"
 CompatHelperLocal = "0.1.27"
 Test = "1"
 TestItemRunner = "1.1.1"

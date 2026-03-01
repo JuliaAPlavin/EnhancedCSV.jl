@@ -53,7 +53,10 @@ function _read_body(sink, source, header; kw...)
     colspecs = NamedTuple(Symbol(d["name"]) => ColumnSpec(d) for d in header["datatype"])
 
     delim = string(get(header, "delimiter", " "))
-    tbl = read_csv(columntable, source; comment="#", delim, kw...)
+    # Force VARCHAR for string-typed columns so DuckDB doesn't auto-detect them as numeric
+    coltypes = _duckdb_column_types(colspecs)
+    typekw = isempty(coltypes) ? (;) : (; types=coltypes)
+    tbl = read_csv(columntable, source; comment="#", delim, typekw..., var"quote"="\"", kw...)
 
     @assert propertynames(tbl) == values(map(c -> c.name, colspecs))
 
@@ -61,6 +64,14 @@ function _read_body(sink, source, header; kw...)
         convert_column(col, spec)
     end
     return sink(tbl)
+end
+
+function _duckdb_column_types(colspecs)
+    types = Dict{String,String}()
+    for spec in colspecs
+        spec.datatype == String && (types[string(spec.name)] = "VARCHAR")
+    end
+    types
 end
 
 """
@@ -95,13 +106,25 @@ function parse_ecsv_header(io::IO)
     end
 
     seek(buf, 0)
-    return YAML.load(buf, _YAML_CONSTRUCTORS)
+    return YAML.load(buf, _YAML_CONSTRUCTORS, _YAML_MULTI_CONSTRUCTORS)
 end
 
 # YAML.jl doesn't support !!omap (throws "not yet implemented"); provide a custom constructor for it
 # since ECSV files use !!omap in their metadata headers
 _construct_omap(constructor, node) = reduce(merge, YAML.construct_sequence(constructor, node))
 const _YAML_CONSTRUCTORS = Dict{String,Function}("tag:yaml.org,2002:omap" => _construct_omap)
+
+# Handle unknown YAML tags (e.g. !astropy.units.Unit) by constructing the underlying value
+function _construct_unknown(constructor, tag_suffix, node)
+    if node isa YAML.MappingNode
+        YAML.construct_mapping(constructor, node)
+    elseif node isa YAML.SequenceNode
+        YAML.construct_sequence(constructor, node)
+    else
+        YAML.construct_scalar(constructor, node)
+    end
+end
+const _YAML_MULTI_CONSTRUCTORS = Dict{Union{String,Nothing},Function}(nothing => _construct_unknown)
 
 struct ColumnSpec
     name::Symbol
@@ -112,7 +135,10 @@ end
 
 ColumnSpec(d::Dict) = ColumnSpec(
     Symbol(d["name"]),
-    DATATYPE_MAP[d["datatype"]],
+    get(DATATYPE_MAP, d["datatype"]) do
+        @warn "Unknown ECSV datatype $(repr(d["datatype"])) for column $(repr(d["name"])), falling back to String"
+        return String
+    end,
     parse_subtype(get(d, "subtype", nothing)),
     parse_unit(get(d, "unit", nothing)),
 )
@@ -120,7 +146,12 @@ parse_subtype(::Nothing) = nothing
 function parse_subtype(subtype_str::String)
     m = match(r"^(\w+)(\[(.+)\])?$", subtype_str)
     @assert !isnothing(m)
-    return (type=DATATYPE_MAP[m.captures[1]], dims=m.captures[3])
+    typename = m.captures[1]
+    if !haskey(DATATYPE_MAP, typename)
+        @warn "Unknown ECSV subtype $(repr(subtype_str)), treating as plain string"
+        return nothing
+    end
+    return (type=DATATYPE_MAP[typename], dims=m.captures[3])
 end
 
 parse_unit(::Nothing) = nothing
@@ -133,12 +164,30 @@ end
 convert_column(col::AbstractVector, spec::ColumnSpec) = _convert_column_u(col, spec, spec.unit)
 
 _convert_column_u(col, spec, u::Union{Nothing, typeof(NoUnits)}) = _convert_column(col, spec.datatype, spec.subtype)
-_convert_column_u(col, spec, u) = _convert_column(col, spec.datatype, spec.subtype) * u
+function _convert_column_u(col, spec, u)
+    result = _convert_column(col, spec.datatype, spec.subtype)
+    if Base.nonmissingtype(eltype(result)) <: AbstractString
+        @warn "Ignoring unit $(repr(u)) for string column $(repr(spec.name))"
+        result
+    else
+        result * u
+    end
+end
 
-function _convert_column(col, datatype::Type{T}, subtype::Nothing) where {T}
-    T == String && return col
-    
-    # Handle missing values
+_is_missing_str(x) = ismissing(x) || x == ""
+
+_convert_column(col, ::Type{String}, ::Nothing) = col
+function _convert_column(col, ::Type{Bool}, ::Nothing)
+    map(col) do x
+        _is_missing_str(x) && return missing
+        x isa Bool && return x
+        s = string(x)
+        s in ("True", "true", "1") && return true
+        s in ("False", "false", "0") && return false
+        error("cannot parse '$s' as Bool")
+    end
+end
+function _convert_column(col, ::Type{T}, ::Nothing) where {T}
     if any(ismissing, col)
         convert(Vector{Union{Missing,T}}, col)
     else
@@ -149,11 +198,18 @@ end
 _convert_column(col, datatype, subtype::NamedTuple) = _convert_column(col, datatype, subtype.type, subtype.dims)
 function _convert_column(col, datatype::Type{String}, subtype::Type{T}, subdims::AbstractString) where {T}
     @assert T != Bool
-    @assert subdims == "null"
 
-    map(col) do x
-        ismissing(x) && return missing
-        JSON.parse(x, Vector{Union{Missing,T}}; allownan=true)
+    if occursin(',', subdims)
+        # Multidimensional array (e.g. "4,2") — parse as generic JSON
+        map(col) do x
+            _is_missing_str(x) && return missing
+            JSON.parse(x; allownan=true)
+        end
+    else
+        map(col) do x
+            _is_missing_str(x) && return missing
+            JSON.parse(x, Vector{Union{Missing,T}}; allownan=true)
+        end
     end
 end
 
@@ -172,8 +228,6 @@ end
 using StructArrays
 
 function _convert_column(col, datatype::Type{String}, subtype::Type{Bool}, subdims::AbstractString)
-    @assert subdims == "null"
-
     symb_to_bool = Dict(
         :false => false,
         :False => false,
@@ -182,7 +236,7 @@ function _convert_column(col, datatype::Type{String}, subtype::Type{Bool}, subdi
     )
 
     map(col) do x
-        ismissing(x) && return missing
+        _is_missing_str(x) && return missing
         JSON.parse(x, StructVector{MyBool}).val
     end
 end
