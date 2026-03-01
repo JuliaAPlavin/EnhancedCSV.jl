@@ -76,7 +76,7 @@ function parse_ecsv_header(source::AbstractString)
 end
 
 function parse_ecsv_header(io::IO)
-    yaml_lines = String[]
+    buf = IOBuffer()
 
     for line in eachline(io)
         if startswith(line, "# %ECSV")
@@ -84,7 +84,7 @@ function parse_ecsv_header(io::IO)
             continue
         elseif startswith(line, "# ")
             # YAML content - remove "# " prefix
-            push!(yaml_lines, line[3:end])
+            println(buf, @view line[3:end])
         elseif startswith(line, "##")
             # Comment line - skip
             continue
@@ -94,7 +94,7 @@ function parse_ecsv_header(io::IO)
         end
     end
 
-    return YAML.load(join(yaml_lines, "\n"))
+    return YAML.load(String(take!(buf)))
 end
 
 struct ColumnSpec
