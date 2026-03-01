@@ -4,19 +4,6 @@ Julia reader for the [ECSV (Enhanced CSV)](https://github.com/astropy/astropy-AP
 
 ECSV was developed by the Astropy project and is gaining adoption in the astronomical community, including use by ESA's Gaia archive.
 
-**Status**
-
-Functionality:
-- ✅ Reading
-- 🚧 Writing
-
-Format features supported:
-- ✅ Scalar columns
-- ✅ Variable-length 1D arrays
-- 🚧 Higher-dimensional arrays
-- ✅ Physical units (via Unitful.jl)
-- 🚧 Table/column metadata
-
 ## Usage
 
 ```julia
@@ -28,3 +15,20 @@ tbl = EnhancedCSV.read(StructArray, "data.ecsv")
 ```
 
 Any Tables.jl-compatible sink can be used (e.g., `StructArray`, or `columntable`/`rowtable` from `Tables.jl`).
+
+## Status
+
+Builds on [QuackIO.jl](https://github.com/JuliaAPlavin/QuackIO.jl) ([DuckDB](https://duckdb.org/)) and [YAML.jl](https://github.com/JuliaData/YAML.jl) for csv and yaml, [VOUnits.jl](https://github.com/JuliaAPlavin/VOUnits.jl) for unit-string conversion, [StructArrays.jl](https://github.com/JuliaArrays/StructArrays.jl) for performant Julia-native tables.
+
+Functionality:
+- ✅ Reading
+  - ✅ Decompress on the fly
+  - 🚧 Lazy, filter, ...
+- ✅ Writing
+  - 🚧 Compress on the fly
+
+Format features supported:
+- ✅ Scalar columns
+- ✅ Arrays: fixed or variable-length, 1- and n-dimensional
+- ✅ Physical units via Unitful.jl
+- 🚧 Table/column metadata
