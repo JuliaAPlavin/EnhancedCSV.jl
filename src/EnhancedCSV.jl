@@ -4,8 +4,8 @@ using QuackIO
 using YAML
 import JSON
 using Unitful
+import VOUnits
 using Tables: columntable
-using DataPipes
 
 export read, write
 
@@ -101,7 +101,7 @@ struct ColumnSpec
     name::Symbol
     datatype::Type
     subtype::Union{NamedTuple,Nothing}
-    unit::Union{Unitful.FreeUnits,Unitful.MixedUnits,Nothing}
+    unit
 end
 
 ColumnSpec(d::Dict) = ColumnSpec(
@@ -119,47 +119,15 @@ end
 
 parse_unit(::Nothing) = nothing
 function parse_unit(unit_str::String)
-    try
-        @p let
-            unit_str
-            replace(__,
-                r"'?\b(/beam|/pix|electron)\b'?" => (s -> (@warn "ignoring the unsupported '$s' unit" unit_str; "")),
-                # "'" => "",  # XXX: shouldn't have arcminutes described this way?
-            )
-            replace(__,
-            #     r"^/" => "1/",
-            #     r"/$" => "",
-                r"^\." => "",
-                r"\.$" => "",
-                r"([^*])\*\*([^*])" => s"\1^\2",
-            )
-            
-            # # handle eg "mas.yr-1":
-            # replace(__, r"(\w)\." => s"\1*")
-            # replace(__, r"(\w)(-?\d)" => s"\1^\2")
-
-            # replace(__,
-            #     r"\bdeg\b" => "°",
-            #     r"\barcsec\b" => "arcsecond",
-            #     r"\barcmin\b" => "arcminute",
-            #     r"\bum\b" => "μm",
-            #     r"\bAngstrom\b" => "angstrom")
-            uparse(unit_context=[Unitful; Unitful.unitmodules], __)
-        end
-    catch exception
-        if exception isa ArgumentError && occursin("could not be found in unit modules", exception.msg)
-            @warn "cannot parse unit '$unit_str', ignoring it"
-        else
-            @warn "cannot parse unit '$unit_str', ignoring it" exception
-        end
-        return nothing
-    end
+    (; unit, valuefn) = VOUnits.parse_unit(unit_str)
+    @assert valuefn === identity "non-trivial valuefn=$valuefn for unit '$unit_str' is not supported"
+    return unit
 end
 
 convert_column(col::AbstractVector, spec::ColumnSpec) = _convert_column_u(col, spec, spec.unit)
 
-_convert_column_u(col, spec, u::Nothing) = _convert_column(col, spec.datatype, spec.subtype)
-_convert_column_u(col, spec, u::Union{Unitful.FreeUnits,Unitful.MixedUnits}) = _convert_column(col, spec.datatype, spec.subtype) * u
+_convert_column_u(col, spec, u::Union{Nothing, typeof(NoUnits)}) = _convert_column(col, spec.datatype, spec.subtype)
+_convert_column_u(col, spec, u) = _convert_column(col, spec.datatype, spec.subtype) * u
 
 function _convert_column(col, datatype::Type{T}, subtype::Nothing) where {T}
     T == String && return col
@@ -261,7 +229,7 @@ function column_to_spec(name::Symbol, col::AbstractVector)
 
     if NMT <: Unitful.Quantity
         valtype = Unitful.numtype(NMT)
-        spec["unit"] = unit_to_ecsv_string(Unitful.unit(NMT))
+        spec["unit"] = VOUnits.unit_string(Unitful.unit(NMT))
         spec["datatype"] = REVERSE_DATATYPE_MAP[valtype]
     elseif NMT <: Unitful.LogScaled
         valtype = NMT.parameters[3]  # numeric type is 3rd parameter of Gain
@@ -282,7 +250,7 @@ function _set_array_spec!(spec, col)
     NME = Base.nonmissingtype(elemT)
     if NME <: Unitful.Quantity
         inner_valtype = Unitful.numtype(NME)
-        spec["unit"] = unit_to_ecsv_string(Unitful.unit(NME))
+        spec["unit"] = VOUnits.unit_string(Unitful.unit(NME))
         spec["subtype"] = "$(REVERSE_DATATYPE_MAP[inner_valtype])[null]"
     elseif NME <: Unitful.LogScaled
         inner_valtype = NME.parameters[3]
@@ -305,16 +273,6 @@ function _infer_array_eltype(col)
     error("cannot infer element type for empty array column")
 end
 
-const SUPERSCRIPT_MAP = Dict(
-    '⁰'=>'0', '¹'=>'1', '²'=>'2', '³'=>'3', '⁴'=>'4',
-    '⁵'=>'5', '⁶'=>'6', '⁷'=>'7', '⁸'=>'8', '⁹'=>'9', '⁻'=>'-',
-)
-
-unit_to_ecsv_string(u::Unitful.Units) = @p let
-    string(u)
-    replace(__, r"[⁰¹²³⁴⁵⁶⁷⁸⁹⁻]+" => m -> "**" * join(SUPERSCRIPT_MAP[c] for c in m))
-    replace(__, ' ' => '*')
-end
 
 prepare_column_for_csv(col::AbstractVector) = _prepare_col(col, Base.nonmissingtype(eltype(col)))
 
