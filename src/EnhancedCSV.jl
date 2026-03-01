@@ -94,7 +94,8 @@ function parse_ecsv_header(io::IO)
         end
     end
 
-    return YAML.load(String(take!(buf)), _YAML_CONSTRUCTORS)
+    seek(buf, 0)
+    return YAML.load(buf, _YAML_CONSTRUCTORS)
 end
 
 # YAML.jl doesn't support !!omap (throws "not yet implemented"); provide a custom constructor for it
