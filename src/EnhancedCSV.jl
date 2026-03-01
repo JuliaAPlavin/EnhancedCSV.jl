@@ -1,6 +1,6 @@
 module EnhancedCSV
 
-using CSV
+using QuackIO
 using YAML
 import JSON
 using Unitful
@@ -40,7 +40,7 @@ The ECSV format consists of:
 # Arguments
 - `sink`: The type to materialize the data into (e.g., `StructArray`)
 - `source`: File path or IO object
-- `kw...`: Additional keyword arguments passed to `CSV.read`
+- `kw...`: Additional keyword arguments passed to `QuackIO.read_csv`
 """
 function read end
 
@@ -48,11 +48,11 @@ function read(sink, source::AbstractString; kw...)
     header = parse_ecsv_header(source)
     colspecs = NamedTuple(Symbol(d["name"]) => ColumnSpec(d) for d in header["datatype"])
 
-    delim = only(get(header, "delimiter", " "))
-    tbl = CSV.read(source, columntable; comment="#", delim, ntasks=1, kw...)
-    
+    delim = string(get(header, "delimiter", " "))
+    tbl = read_csv(columntable, source; comment="#", delim, kw...)
+
     @assert propertynames(tbl) == values(map(c -> c.name, colspecs))
-    
+
     tbl = map(tbl, colspecs) do col, spec
         convert_column(col, spec)
     end
@@ -73,7 +73,7 @@ end
 
 function parse_ecsv_header(io::IO)
     yaml_lines = String[]
-    
+
     for line in eachline(io)
         if startswith(line, "# %ECSV")
             # Version line - skip
@@ -240,9 +240,14 @@ function write(io::IO, table; delim=',', kw...)
     # Prepare data columns
     csv_cols = NamedTuple(name => prepare_column_for_csv(col) for (name, col) in pairs(cols))
 
-    # Write CSV data
-    missingstring = delim == ' ' ? "\"\"" : ""
-    CSV.write(io, csv_cols; delim, append=true, writeheader=true, missingstring, kw...)
+    # Write CSV data via temp file (QuackIO writes to files, not IO)
+    csvtmp = tempname() * ".csv"
+    try
+        write_table(csvtmp, csv_cols; format=:csv, delim=string(delim), kw...)
+        Base.write(io, Base.read(csvtmp))
+    finally
+        rm(csvtmp, force=true)
+    end
 end
 
 function column_to_spec(name::Symbol, col::AbstractVector)
