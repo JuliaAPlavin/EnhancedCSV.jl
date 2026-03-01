@@ -94,8 +94,13 @@ function parse_ecsv_header(io::IO)
         end
     end
 
-    return YAML.load(String(take!(buf)))
+    return YAML.load(String(take!(buf)), _YAML_CONSTRUCTORS)
 end
+
+# YAML.jl doesn't support !!omap (throws "not yet implemented"); provide a custom constructor for it
+# since ECSV files use !!omap in their metadata headers
+_construct_omap(constructor, node) = reduce(merge, YAML.construct_sequence(constructor, node))
+const _YAML_CONSTRUCTORS = Dict{String,Function}("tag:yaml.org,2002:omap" => _construct_omap)
 
 struct ColumnSpec
     name::Symbol
@@ -294,11 +299,6 @@ function json_encode_array(arr::AbstractVector)
         arr
     end
     JSON.json(cleaned; allownan=true)
-end
-
-__precompile__(false)
-@eval YAML function construct_yaml_omap(constructor::Constructor, node::Node)
-    reduce(merge, construct_sequence(constructor, node))
 end
 
 end
