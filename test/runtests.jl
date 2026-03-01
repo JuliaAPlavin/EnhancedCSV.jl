@@ -15,6 +15,11 @@ using TestItemRunner
     @test tbl.g_transit_flux[2][5] == 788.8084742392512u"s^-1"
     r = tbl[2]
     @test all(==((21,)), map(size, filter(x -> x isa AbstractArray, values(r))))
+
+    using CodecZlib
+    tbl_gz = EnhancedCSV.read(StructArray, "data/gaia.csv.gz", GzipDecompressor())
+    @test length(tbl_gz) == 5
+    @test isequal(tbl_gz, tbl)
 end
 
 @testitem "write scalars" begin
@@ -94,6 +99,31 @@ end
     @test tbl2.g_transit_time[2] == tbl.g_transit_time[2]
     @test tbl2.g_transit_flux[2][5] == tbl.g_transit_flux[2][5]
     @test tbl2.photometry_flag_noisy_data[1] == tbl.photometry_flag_noisy_data[1]
+end
+
+@testitem "compressed roundtrip" begin
+    using StructArrays
+    using CodecZlib, CodecZstd
+
+    tbl_orig = StructArray(a=[1, 2, 3], b=[4.0, 5.0, 6.0], c=["x", "y", "z"])
+    dest = tempname() * ".ecsv"
+    EnhancedCSV.write(dest, tbl_orig)
+
+    for (ext, cmd, codec) in [
+        (".gz", `gzip -c`, GzipDecompressor()),
+        (".zst", `zstd -c`, ZstdDecompressor()),
+    ]
+        dest_c = dest * ext
+        run(pipeline(`$cmd $dest`, stdout=dest_c))
+        tbl_c = EnhancedCSV.read(StructArray, dest_c, codec)
+        @test isequal(tbl_c, tbl_orig)
+
+        # codec works regardless of file extension
+        dest_noext = tempname()
+        cp(dest_c, dest_noext)
+        tbl_noext = EnhancedCSV.read(StructArray, dest_noext, codec)
+        @test isequal(tbl_noext, tbl_orig)
+    end
 end
 
 @testitem "_" begin

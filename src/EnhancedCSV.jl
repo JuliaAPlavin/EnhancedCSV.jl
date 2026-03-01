@@ -46,6 +46,10 @@ function read end
 
 function read(sink, source::AbstractString; kw...)
     header = parse_ecsv_header(source)
+    _read_body(sink, source, header; kw...)
+end
+
+function _read_body(sink, source, header; kw...)
     colspecs = NamedTuple(Symbol(d["name"]) => ColumnSpec(d) for d in header["datatype"])
 
     delim = string(get(header, "delimiter", " "))
